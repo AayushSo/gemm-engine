@@ -1,0 +1,15 @@
+# editor swap/backup files
+*.swp
+*.swo
+*~
+
+# simulation and lint outputs
+build/
+obj_dir/
+*.vvp
+*.vcd
+*.fst
+*.log
+
+# Jupyter autosave
+.ipynb_checkpoints/
