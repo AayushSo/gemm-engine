@@ -85,7 +85,8 @@ wire signed [ACC_W*S-1:0] c0_rdata;
 wire signed [ACC_W*S-1:0] c1_rdata;
 
 wire [T-1:0] a_first;
-wire w_latch;
+wire w_latch, weight_stall;
+wire dummy_a_first;
 
 wire        [IN_W-1:0] act0_in [S-1:0];
 wire        [IN_W-1:0] act1_in [S-1:0];
@@ -344,18 +345,26 @@ u_weight_controller
 (
 	.clk(clk), 
 	.rst(rst),
+	.abort_req(abort_req),
+	.wcmd_data(wcmd_data),
+	.wcmd_valid(wcmd_valid),
+	.wcmd_stall(wcmd_stall),
 	.w_valid(w_valid),
 	.w_stall(w_stall),
+	.weight_stall(weight_stall),
+	.dummy_a_first(dummy_a_first),
 	.w_latch(w_latch),
 	.w0_wen(w0_wen),
 	.w1_wen(w1_wen),  
 	.w0_ren(w0_ren),  
 	.w1_ren(w1_ren),  
-	.w0_waddr(w0_waddr), 
-	.w1_waddr(w1_waddr), 
-	.w0_raddr(w0_raddr), 
-	.w1_raddr(w1_raddr) 
+	.w0_waddr_out(w0_waddr), 
+	.w1_waddr_out(w1_waddr), 
+	.w0_raddr_out(w0_raddr), 
+	.w1_raddr_out(w1_raddr),
+	.ld_go (1'b1)
 	);
+
 
 
 ////////////////////////  Act Controller
