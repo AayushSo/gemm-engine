@@ -23,6 +23,7 @@ import gemm_v1_pkg::*;
 	output reg weight_stall,
 	output w0_wen, w1_wen,
 	output w0_ren, w1_ren,
+	output logic w0_zero, w1_zero,
 	output logic [W_AW-1:0] w0_waddr_out,w0_raddr_out,
 	output logic [W_AW-1:0] w1_waddr_out,w1_raddr_out,
 	input ld_go
@@ -45,6 +46,7 @@ tag_t pend_cmd_rdata__tag;
 logic [W_AW-1:0] w0_ctr;		// 0 = idle, 1..16 = cycle of the current load
 logic [W_AW-1:0] w0_ctr_next;
 logic [S-1:0] w0_ren_dly;		// bank L read enables of the last S cycles
+logic [S-1:0] w0_zero_dly;		// bank L zero's of the last S cycles
 logic [W_AW:0] w_rows_avail;		// rows written, not yet read by bank L
 wire ld_start;
 
@@ -99,6 +101,8 @@ always@(posedge clk) begin
 	if (rst || abort_req) begin
 		w0_ctr <= 'd0;
 		w0_ren_dly <= 'd0;
+		w0_zero_dly <= 'd0;
+		w0_zero <= 'd0;
 		wptr <= 'd0;
 		w0_waddr <= 'd0;
 		w1_waddr <= 'd0;
@@ -109,7 +113,9 @@ always@(posedge clk) begin
 	end
 	else begin
 		w0_ctr <= w0_ctr_next;
+		w0_zero <= (w0_ctr_next !=0) && !w0_ren;
 		w0_ren_dly <= {w0_ren_dly[S-2:0], w0_ren};
+		w0_zero_dly <= {w0_zero_dly[S-2:0], w0_zero};
 		wptr   <= wptr_next;
 		w0_waddr <= w0_waddr_next;
 		w1_waddr <= w1_waddr_next;
@@ -149,6 +155,7 @@ end
 
 assign w0_ren = (w0_ctr_next != 'd0) && (w0_ctr_next > T - pend_cmd_rdata__ks);
 assign w1_ren = w0_ren_dly[S-1];
+assign w1_zero = w0_zero_dly[S-1];
 
 
 endmodule
