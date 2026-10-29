@@ -30,6 +30,16 @@ localparam int LANES = S;		// lanes per bank
 // ---- pass / accumulator ----
 localparam int R         = 16;		// rows of A per pass
 localparam int ACC_DEPTH = R;		// accumulator words per bank
+localparam int ACC_AW    = $clog2(ACC_DEPTH);	// 4
+
+// ---- output timing (cycles after AC's go, i.e. the cycle ocmd_valid is high) ----
+// go -> a_first[0] at the array: 1 (AC's a_first register); row x, column i leaves the array T cycles
+// later (+x+i); the output de-skew delays column j of each half by S-1-j, so half 0's row x reaches
+// the OC at go + OC_PSUM_LAT + x and half 1's row x S cycles after that.
+localparam int OC_PSUM_LAT = 1 + T + (S-1);		// 24: half-0 row 0 at the OC input
+localparam int OC_RD_LAT   = 1;				// ACC read latency (ram_1r1w, synchronous read)
+localparam int OC_RD_START = OC_PSUM_LAT - OC_RD_LAT;	// 23: bank 0 issues the ACC read of row 0
+localparam int OC_POP      = OC_RD_START + R - 1;	// 38: bank 0's last read-stage cycle (ocmd FIFO pop)
 
 // ---- input banks (ring buffers, one row per word) ----
 // 25 rows is the floor for full rate (16 + 8 for the late bank's read offset, +1 since a slot
@@ -99,14 +109,20 @@ typedef struct packed {
 	tag_t	tag;
 } wcmd_t;
 
-// TC -> AC pass command
+// TC -> AC pass command. Also carries the OC fields: AC forwards them as the ocmd at its pass start.
+// The low OCMD_W bits are laid out exactly as ocmd_t.
 typedef struct packed {
 	size_t	k_size;		// A tile columns
-	size_t	m_size;		// A tile rows
+	logic	first;		// OC: k == 0
+	logic	last;		// OC: last k
+	logic	gemm_last;	// OC: final pass of the GEMM
+	size_t	m_size;		// A tile rows (also OC rows to output)
+	size_t	n_size;		// OC: columns to output
+	id_t	id;		// OC: GEMM ID
 	tag_t	tag;
 } acmd_t;
 
-// TC -> OC pass command (delayed to match the psums)
+// AC -> OC pass command, sent at AC's pass start (go)
 typedef struct packed {
 	logic	first;		// k == 0: no ACC fetch, add 0
 	logic	last;		// last k: result to C out, no write-back
@@ -120,6 +136,7 @@ typedef struct packed {
 localparam int CMD_W  = $bits(cmd_t);		// 52
 localparam int RESP_W = $bits(resp_t);		// 8
 localparam int OCMD_W = $bits(ocmd_t);		// 18
+localparam int ACMD_W = $bits(acmd_t);		// 22
 
 // accept warnings: bit positions in info
 localparam int RESP__INFO_WARN_M = 0;		// M field = 0 (runs as 2^DIM_W)

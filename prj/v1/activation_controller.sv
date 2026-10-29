@@ -18,6 +18,10 @@ import gemm_v1_pkg::*;
 	input acmd_t acmd_data,
 	input acmd_valid,
 	output acmd_stall,
+	// act->out controller bus DV
+	output ocmd_t ocmd_data,
+	output ocmd_valid,
+	//input acmd_stall,
 	// systolic control signals
  	output logic [T-1:0] a_first,
 	input weight_stall, // weights loaded
@@ -40,7 +44,8 @@ logic [A_AW:0] a_used;			// rows written, not yet read by bank B (0..A_DEPTH)
 logic [SIZE_W:0] pend_cmd_rdata__ms;	// 1..16
 logic ld_start;
 // Entry is {ms, tag}
-logic [SIZE_W+$bits(tag_t):0] pend_cmd_rdata;
+//logic [SIZE_W+$bits(tag_t):0] pend_cmd_rdata;
+acmd_t pend_cmd_rdata;
 tag_t pend_cmd_rdata__tag;
 
 logic [A_AW-1:0] a0_ctr;		// 0 = idle, 1..16 = cycle of the current load
@@ -60,7 +65,7 @@ logic [A_AW:0] a0_raddr_next,a1_raddr_next;
 logic [SIZE_W:0] acmd_data__m_size;
 logic abort_sig_hold_a;
 
-sync_fifo #(.W(SIZE_W+1 + $bits(tag_t)), .DEPTH(PEND_DEPTH))
+sync_fifo #(.W(ACMD_W), .DEPTH(PEND_DEPTH))
 u_pend_cmd_fifo (
             .clk(clk),
             .rst(rst),
@@ -68,17 +73,22 @@ u_pend_cmd_fifo (
             .ren(pend_cmd_ren),
             .rdata(pend_cmd_rdata),
             .wen(acmd_valid && !acmd_stall),
-            .wdata({acmd_data__m_size,acmd_data.tag}),
+            .wdata(acmd_data),
             .full(pend_cmd_full),
             .empty(pend_cmd_empty),
             .count()
             );
 
-assign pend_cmd_rdata__tag = pend_cmd_rdata[$bits(tag_t)-1:0];
-assign pend_cmd_rdata__ms = pend_cmd_rdata[SIZE_W+$bits(tag_t):$bits(tag_t)];
+assign pend_cmd_rdata__tag = pend_cmd_rdata.tag;
+assign pend_cmd_rdata__ms[SIZE_W]     = pend_cmd_rdata.m_size == 'd0 ? 1'b1 : 1'b0; 
+assign pend_cmd_rdata__ms[SIZE_W-1:0] = pend_cmd_rdata.m_size; 
+assign ocmd_data                      = pend_cmd_rdata[OCMD_W-1:0];
+assign ocmd_valid = ld_start;
+//assign pend_cmd_rdata__tag = pend_cmd_rdata[$bits(tag_t)-1:0];
+//assign pend_cmd_rdata__ms = pend_cmd_rdata[SIZE_W+$bits(tag_t):$bits(tag_t)];
 assign pend_cmd_ren = (a0_ctr_next==T);	// pop out cmd
-assign acmd_data__m_size[SIZE_W] = acmd_data.m_size == 'd0 ? 1'b1 : 1'b0; 
-assign acmd_data__m_size[SIZE_W-1:0] = acmd_data.m_size; 
+//assign acmd_data__m_size[SIZE_W] = acmd_data.m_size == 'd0 ? 1'b1 : 1'b0; 
+//assign acmd_data__m_size[SIZE_W-1:0] = acmd_data.m_size; 
 
 assign a0_waddr_out = a0_waddr[A_AW-1:0];
 assign a1_waddr_out = a1_waddr[A_AW-1:0];
@@ -95,6 +105,7 @@ assign a1_wen = a_valid && !a_stall;
 assign rptr = a0_raddr;
 
 assign a_stall = (a_used == A_DEPTH) || abort_sig_hold_a;
+
 
 always@(posedge clk) begin
 	if (rst || abort_req) begin

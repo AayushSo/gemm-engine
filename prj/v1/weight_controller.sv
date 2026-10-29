@@ -43,8 +43,8 @@ logic [SIZE_W:0] pend_cmd_rdata__ks;	// 1..16
 logic [SIZE_W+$bits(tag_t):0] pend_cmd_rdata;
 tag_t pend_cmd_rdata__tag;
 
-logic [W_AW-1:0] w0_ctr;		// 0 = idle, 1..16 = cycle of the current load
-logic [W_AW-1:0] w0_ctr_next;
+logic [$clog2(T):0] w0_ctr;		// 0 = idle, 1..16 = cycle of the current load
+logic [$clog2(T):0] w0_ctr_next;
 logic [S-1:0] w0_ren_dly;		// bank L read enables of the last S cycles
 logic [S-1:0] w0_zero_dly;		// bank L zero's of the last S cycles
 logic [W_AW:0] w_rows_avail;		// rows written, not yet read by bank L

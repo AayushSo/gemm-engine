@@ -12,6 +12,7 @@ Responses (spec §9.6):
 	Outstanding IDs (running + issued, waiting for out_ack) are held in a FIFO, pushed at accept.
 */
 
+// inst gemm_top.sv
 module top_controller
 import gemm_v1_pkg::*;
 (
@@ -183,11 +184,15 @@ assign wcmd_data.k_size = loop_k_end  ? cmd_r.k[SIZE_W-1:0] : 'd0;
 assign wcmd_data.n_size = loop_n_end  ? cmd_r.n[SIZE_W-1:0] : 'd0;
 assign wcmd_data.tag = tag;
 
-// TODO : instantiate acmd
-// TODO : acmd should be 1 cyc delayed? add buffer if needed
 assign acmd_data.k_size = loop_k_end  ? cmd_r.k[SIZE_W-1:0] : 'd0;
 assign acmd_data.m_size = loop_m_end  ? cmd_r.m[SIZE_W-1:0] : 'd0;
 assign acmd_data.tag = tag;
+// added ocmd packets
+assign acmd_data.first = cmd_K==1;
+assign acmd_data.last = loop_k_end;
+assign acmd_data.gemm_last = loop_k_end && loop_m_end && loop_n_end;
+assign acmd_data.n_size = loop_n_end  ? cmd_r.n[SIZE_W-1:0] : 'd0;
+assign acmd_data.id = cmd_r.id;
 
 // Pending response FIFO: IDs of outstanding GEMMs, oldest at the head
 

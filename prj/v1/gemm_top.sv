@@ -8,6 +8,7 @@
 		* Skew/deskew buffers
 */
 
+// package : gemm_v1_pkg.sv
 module gemm_top
 import gemm_v1_pkg::*;
 (
@@ -42,6 +43,7 @@ localparam ADDR_D = $clog2(ACC_DEPTH);
 
 wcmd_t wcmd_data;
 acmd_t acmd_data;
+ocmd_t ocmd_data;
 //resp_t resp_data;
 
 // Regs
@@ -73,6 +75,12 @@ wire        [PSUM_W-1:0] psum_out1 [S-1:0];
 //wire signed [ACC_W-1:0] c1_out [S-1:0];
 wire signed [ACC_W-1:0] c0_data [S-1:0];
 wire signed [ACC_W-1:0] c1_data [S-1:0];
+wire signed [ACC_W-1:0] c0_acc [S-1:0];
+wire signed [ACC_W-1:0] c1_acc [S-1:0];
+reg  signed [ACC_W-1:0] c0_out_r [S-1:0];
+reg  signed [ACC_W-1:0] c1_out_r [S-1:0];
+wire c0_first, c1_first, c0_oen, c1_oen;
+wire out_ack;
 
 wire signed [IN_W*S-1:0] w0_wdata;
 wire signed [IN_W*S-1:0] w1_wdata;
@@ -108,6 +116,7 @@ wire [ADDR_D-1:0] c0_raddr, c1_raddr;
 
 wire wcmd_valid, wcmd_stall;
 wire acmd_valid, acmd_stall;
+wire ocmd_valid;
 wire ld_go;
 //wire resp_valid;
 
@@ -293,10 +302,8 @@ generate
 	for(i=0;i<S;i++) begin
 		assign c0_wdata[ACC_W*(i+1)-1:ACC_W*i] = c0_data [i];
 		assign c1_wdata[ACC_W*(i+1)-1:ACC_W*i] = c1_data [i];
-		assign c0_out[i] = c0_rdata[ACC_W*(i+1)-1:ACC_W*i];
-		assign c1_out[i] = c1_rdata[ACC_W*(i+1)-1:ACC_W*i];
-//		assign c_out[i] = c0_rdata[ACC_W*(i+1)-1:ACC_W*i];
-//		assign c_out[S+i] = c1_rdata[ACC_W*(i+1)-1:ACC_W*i];
+		assign c0_out[i] = c0_out_r[i];
+		assign c1_out[i] = c1_out_r[i];
 	end
 endgenerate
 
@@ -329,12 +336,19 @@ u_out_buf1
 	);
 
 ////////////////////////  Accumulator
-// TODO: Temporary logic. add appropriate logic here
 
 generate
 	for(i=0;i<S;i++) begin
-		assign c0_data[i] = $signed(psum_out0[i]) + c0_out[i];
-		assign c1_data[i] = $signed(psum_out1[i]) + c1_out[i];
+		//assign c0_data[i] = $signed(psum_out0[i]) + c0_out[i];
+		//assign c1_data[i] = $signed(psum_out1[i]) + c1_out[i];
+		assign c0_acc[i]  = c0_first ? 'sd0 : $signed(c0_rdata[ACC_W*(i+1)-1:ACC_W*i]);
+		assign c1_acc[i]  = c1_first ? 'sd0 : $signed(c1_rdata[ACC_W*(i+1)-1:ACC_W*i]);
+		assign c0_data[i] = $signed(psum_out0[i]) + c0_acc[i];
+		assign c1_data[i] = $signed(psum_out1[i]) + c1_acc[i];
+		always@(posedge clk) begin
+			if (c0_oen) c0_out_r[i] <= c0_data[i];
+			if (c1_oen) c1_out_r[i] <= c1_data[i];
+		end
 	end
 endgenerate
 
@@ -396,6 +410,9 @@ u_act_controller
 	.acmd_data(acmd_data),
 	.acmd_valid(acmd_valid &~ wcmd_stall),
 	.acmd_stall(acmd_stall),
+	// AC -> OC intf
+	.ocmd_data(ocmd_data),
+	.ocmd_valid(ocmd_valid),
 	// activation RAM controls
 	.a0_wen(a0_wen),
 	.a1_wen(a1_wen),  
@@ -412,13 +429,25 @@ u_act_controller
 // generate the act buffer RW signals, 
 // a_first signal
 
-out_controller #(.D(ADDR_D))
+out_controller 
 u_out_controller
 (
 	.clk(clk), 
 	.rst(rst),
+	.abort_req(abort_req),
+	// AC-> OC DV bus intf
+	.ocmd_data(ocmd_data),
+	.ocmd_valid(ocmd_valid),
+	// output valid
 	.c0_valid(c0_valid),
 	.c1_valid(c1_valid),
+	// accumulator datapath controls
+	.out_ack(out_ack), // GEMM done to TC 
+	.c0_first(c0_first),
+	.c1_first(c1_first),
+	.c0_oen(c0_oen),
+	.c1_oen(c1_oen),
+	// OC SRAM intf
 	.c0_wen(c0_wen),
 	.c1_wen(c1_wen),  
 	.c0_ren(c0_ren),  
@@ -453,7 +482,8 @@ u_top_controller
 	.acmd_valid(acmd_valid),
 	.acmd_stall(acmd_stall),
 	.abort_req(abort_req),
-	.out_ack(1'b0)
+	// end response OK
+	.out_ack(out_ack)
 	);
 
 endmodule
