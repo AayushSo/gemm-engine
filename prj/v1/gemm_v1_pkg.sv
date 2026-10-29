@@ -116,6 +116,10 @@ typedef struct packed {
 	logic	first;		// OC: k == 0
 	logic	last;		// OC: last k
 	logic	gemm_last;	// OC: final pass of the GEMM
+	logic	r_first;	// OC: first block row (r == 0)
+	logic	r_last;		// OC: last block row
+	logic	n_first;	// OC: first block column (n == 0)
+	logic	n_last;		// OC: last block column
 	size_t	m_size;		// A tile rows (also OC rows to output)
 	size_t	n_size;		// OC: columns to output
 	id_t	id;		// OC: GEMM ID
@@ -127,16 +131,32 @@ typedef struct packed {
 	logic	first;		// k == 0: no ACC fetch, add 0
 	logic	last;		// last k: result to C out, no write-back
 	logic	gemm_last;	// final pass of the GEMM: ack TC once its last C row has left
+	logic	r_first;	// first block row (r == 0)
+	logic	r_last;		// last block row
+	logic	n_first;	// first block column (n == 0)
+	logic	n_last;		// last block column
 	size_t	m_size;		// rows to output
 	size_t	n_size;		// columns to output
 	id_t	id;		// GEMM ID, returned on the OC -> TC ack
 	tag_t	tag;
 } ocmd_t;
 
+// OC -> downstream block header
+typedef struct packed {
+	logic	r_first;	// first block row of the GEMM
+	logic	r_last;		// last block row
+	logic	n_first;	// first block column
+	logic	n_last;		// last block column
+	size_t	m_size;		// rows in this block (0 = 16)
+	size_t	n_size;		// columns in this block (0 = 16): c0 lanes < min(n, S), c1 lanes < n - S
+	id_t	id;		// descriptor ID
+} c_hdr_t;
+
 localparam int CMD_W  = $bits(cmd_t);		// 52
 localparam int RESP_W = $bits(resp_t);		// 8
-localparam int OCMD_W = $bits(ocmd_t);		// 18
-localparam int ACMD_W = $bits(acmd_t);		// 22
+localparam int OCMD_W  = $bits(ocmd_t);		// 22
+localparam int ACMD_W  = $bits(acmd_t);		// 26
+localparam int C_HDR_W = $bits(c_hdr_t);	// 16
 
 // accept warnings: bit positions in info
 localparam int RESP__INFO_WARN_M = 0;		// M field = 0 (runs as 2^DIM_W)

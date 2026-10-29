@@ -1,7 +1,7 @@
 // GEMM engine v1: design file list
 //
 // lint : verilator --lint-only -Wall -f prj/v1/v1.f --top-module <top>
-// sim  : iverilog -g2012 -c prj/v1/v1.f -c prj/v1/tb/tb.f -o <out>.vvp
+// elab : iverilog -g2012 -c prj/v1/v1.f -s gemm_top -o <out>.vvp
 //
 // Order: project package first, then rtl/ (generic and shared modules),
 // then prj/v1 (project modules). Nothing in rtl/ may import the package.

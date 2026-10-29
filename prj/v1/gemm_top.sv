@@ -33,7 +33,10 @@ import gemm_v1_pkg::*;
 	output signed [ACC_W-1:0] c0_out [S-1:0],
 	output signed [ACC_W-1:0] c1_out [S-1:0],
 	output c0_valid,
-	output c1_valid
+	output c1_valid,
+	// output block header DV
+	output c_hdr_t c_hdr_data,
+	output c_hdr_valid
 	);
 
 //parameters
@@ -447,6 +450,9 @@ u_out_controller
 	.c1_first(c1_first),
 	.c0_oen(c0_oen),
 	.c1_oen(c1_oen),
+	// output block header
+	.c_hdr_data(c_hdr_data),
+	.c_hdr_valid(c_hdr_valid),
 	// OC SRAM intf
 	.c0_wen(c0_wen),
 	.c1_wen(c1_wen),  

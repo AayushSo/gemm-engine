@@ -256,8 +256,15 @@ The pass type only sets two selects:
 | 36 | B23 | A22 | C23 | **C23 final → output** |
 
 ### 8.4 Performance model
-cycles ≈ 16 · (M/16)(N/16)(K/16) + 16 (first weight preload) + pipeline fill (≈ 31 + SRAM/ACC latency).
-For the example: 576 / ≈ 625 ≈ **92%**. Larger GEMMs approach 100%. Milestone 5 measures the RTL against this model.
+cycles ≈ 16 · (M/16)(N/16)(K/16) + 64, from the descriptor's accept to the last C row, with the input streams
+ready. The 64 cycles are fixed:
+- **fill, 32:** the first B tile's 16 rows arrive, then the 16-cycle weight load, before the first pass starts;
+- **drain, 48 − 16:** the last pass's last `c1` row leaves 48 cycles after that pass starts (array 16 + de-skew 7
+  + `a_first` and C out registers 2 + `c1` offset 8 + 15 rows), of which its own 16 cycles are already counted.
+
+Measured on the RTL (joint testbench): the example takes **640 cycles, 576 / 640 = 90.0%**, and every pass is
+16.00 cycles apart. Back-to-back GEMMs pay the fill and drain only once: the next GEMM's first pass starts 16
+cycles after the previous one's last (4 × the example: 2368 cycles, 97.3%). Larger GEMMs approach 100%.
 
 ---
 
@@ -333,7 +340,7 @@ TC walks the §8.1 loops (counters r, n, k) and issues one pass command per pass
 |---|---|---|---|
 | WC | k-size, n-size, tag | 4 + 4 + 3 | Rows and columns of this B tile |
 | AC | k-size, m-size, tag | 4 + 4 + 3 | Columns and rows of this A tile |
-| OC | `first`, `last`, `gemm_last`, m-size, n-size, ID, tag | 1 + 1 + 1 + 4 + 4 + 4 + 3 = 18 | `first` = (k == 0), `last` = (k == last); both set = "only" pass. `gemm_last` = final pass of the GEMM; ID is returned on `out_ack` (§9.1). Delayed to match the psums (§9.1) |
+| OC | `first`, `last`, `gemm_last`, `r_first`, `r_last`, `n_first`, `n_last`, m-size, n-size, ID, tag | 1 + 1 + 1 + 4 + 4 + 4 + 4 + 3 = 22 | `first` = (k == 0), `last` = (k == last); both set = "only" pass. `gemm_last` = final pass of the GEMM (= `last && r_last && n_last`); ID is returned on `out_ack` (§9.1). `r_*` / `n_*` = block position, sent on the output block header (§10). Delayed to match the psums (§9.1) |
 
 - **No addresses.** WC and AC own their read pointers (§7.2); the next tile in the bank is by definition this
   pass's tile. Shapes stay in TC.
@@ -346,7 +353,7 @@ TC walks the §8.1 loops (counters r, n, k) and issues one pass command per pass
 |---|---|---|
 | K (k-size < 16) | WC and AC | WC loads zero weight rows for rows ≥ k-size (the load still takes 16 shift cycles). AC zeroes A lanes ≥ k-size. Zeroing one side is enough arithmetically; zeroing both keeps don't-care (possibly X) lanes out of the array in simulation |
 | M (m-size < 16) | AC, OC | AC sends 16 rows: the real ones, then zero rows marked invalid. The pass keeps its 16 cycles (a shorter pass would leave a bubble, as the next weight load takes 16). OC ignores the invalid psum rows |
-| N (n-size < 16) | WC, OC | WC zeroes weight columns ≥ n-size. OC doesn't output them (encoding [OPEN], §13 #1). With n-size ≤ 8, the C out R stream is idle for that block |
+| N (n-size < 16) | WC, OC | WC zeroes weight columns ≥ n-size. C out still sends full half-rows; the block header's n-size tells downstream which lanes are valid (§10). With n-size ≤ 8, the C out R stream is idle for that block |
 
 ### 9.4 Command flow example
 A 32×48 · B 48×32 (M = 32, K = 48, N = 32): r ∈ {0, 1}, n ∈ {0, 1}, k ∈ {0, 1, 2}, so 2 · 2 · 3 = **12 passes**.
@@ -440,9 +447,11 @@ and an **end**.
 
 In v1 an end response is either OK or aborted; codes 1 and 2 keep room for error reporting later.
 
-- **ID:** chosen by the host, so it can serve as a job tag. At most 3 GEMMs are outstanding (1 running + 2 queued),
-  so 2 bits would be unique; 4 bits leave the host room for its own numbering. Responses are in order, so the ID is
-  for matching and debug, not reordering.
+- **ID:** chosen by the host, so it can serve as a job tag. Up to 4 GEMMs can be outstanding (TC's pending FIFO:
+  the running one plus GEMMs fully issued but still waiting for `out_ack`, which happens with short GEMMs), so
+  2 bits would be unique; 4 bits leave the host room for its own numbering. Responses are in order, so the ID is
+  for matching and debug, not reordering. The ID also appears on the output block header (§10). The engine never
+  checks it: matching by ID assumes the host keeps the IDs of outstanding GEMMs unique (a convention, not enforced).
 - **Response buffer:** at most 2 responses are produced in one cycle (one accept, since `cmd` takes at most one
   descriptor per cycle, and one end). `resp` sends one per cycle, so a collision leaves a backlog of 1, and the
   backlog can't grow: ends are tens of cycles apart (even a K = 16 GEMM), and accepts are limited by the queue. So
@@ -512,18 +521,51 @@ address and pushes into the same input streams, with no engine change. Alternati
 - **Inputs:** two DVS streams of data only, in pass order (§7.2, §9.5):
   - **A:** `a_data` (16 × int8, one A row), `a_valid`, `a_stall`;
   - **B:** `w_data` (16 × int8, one B row), `w_valid`, `w_stall`.
-- **Output:** two DV half-row streams, each with `valid` only (no stall or ready):
-  - **C out L** (`c0_out`, `c0_valid`): C columns 0–7 of the current block, 8 × int32 per cycle;
-  - **C out R** (`c1_out`, `c1_valid`): C columns 8–15, the same rows **8 cycles later**.
+- **Output:** two DV half-row streams and one DV block header, all with `valid` only (no stall or ready):
 
-  Rows leave in a fixed order: blocks in the §8.1 order (r, then n), and rows 0..15 within each block, during the
-  block's last pass. An edge block outputs only its m-size rows; how its unused columns are marked is [OPEN]
-  (§13 #1). Downstream can place each half by counting; no address or tag is sent. Each half writes its
-  own bank downstream, so the halves are never realigned (realigning would cost about 2k flops).
+  | Bus | Dir | Payload |
+  |---|---|---|
+  | `c0` (C out L) | DV out | C columns 0–7 of the current block, 8 × int32 = 256 b |
+  | `c1` (C out R) | DV out | C columns 8–15, the same rows **exactly 8 cycles later** |
+  | `c_hdr` | DV out | {`r_first`, `r_last`, `n_first`, `n_last`, m-size[3:0], n-size[3:0], ID[3:0]} = 16 b, once per block |
+
+  Rows leave in a fixed order: blocks in the §8.1 order (r, then n), and rows 0..m-size−1 of each block on
+  consecutive cycles, during the block's last pass. Each half writes its own bank downstream, so the halves are
+  never realigned (realigning would cost about 2k flops).
+
+  **Block header (`c_hdr`).** Valid in the cycle of each block's first `c0` row (row 0); every block has at least
+  one `c0` row, so one header on the `c0` timeline describes both halves. Fields:
+  - `r_first` / `r_last`: first / last block row of the GEMM (r == 0, r == last); `n_first` / `n_last`: first /
+    last block column (n == 0, n == last);
+  - m-size, n-size: the block's rows and columns (4 bits, 0 = 16);
+  - ID: the descriptor's ID (§9.2), so downstream can match blocks to the end response on `resp`.
+
+  **Output contract** (downstream relies on it; the engine does not mark individual beats):
+  - each active half sends exactly m-size rows per block; there is no per-beat end-of-block marker, downstream
+    counts rows;
+  - `c1` carries a block only if n-size > 8, and `c1` row x arrives exactly 8 cycles after `c0` row x. A `c1` row
+    can arrive after the next block's header (blocks can overlap by up to 8 cycles; a short next block, even a
+    whole short GEMM, can finish on `c0` before them), so downstream labels `c1`
+    rows by the fixed offset (or a 2-entry header queue), not by the latest header;
+  - valid lanes: `c0` lanes < min(n-size, 8), `c1` lanes < n-size − 8. Other lanes are undefined;
+  - a GEMM starts with the header that has `r_first && n_first`, and ends with the last row of the block with
+    `r_last && n_last`: on `c1` if that block's n-size > 8, else on `c0`. `out_ack` (and so the end response)
+    follows on the `c1` timeline of that row: the same cycle if n-size > 8, 8 cycles later if not. That keeps the
+    acks in GEMM order and never two in one cycle;
+  - abort: both halves stop in the same cycle, so the last block can be cut short (often only its `c1` rows,
+    which trail). The next header with `r_first && n_first` is the resync point; `resp` reports the aborted GEMM
+    by ID (§9.6).
+
+  **ID agreement.** The engine does not check IDs. Matching blocks and responses by ID is only unambiguous if the
+  host keeps the IDs of outstanding GEMMs unique (up to 4 can be outstanding: TC's pending FIFO). Order is still a fallback:
+  GEMMs finish in order.
 
 ---
 
 ## 11. Verification plan
+The repository holds the design only; the bring-up testbenches are not part of it. This section records the plan
+and, under **Bring-up results**, what was run.
+
 - **Reference model:** an exact integer GEMM (SV or Python) compared bit for bit with C.
 - **Directed tests:** K = 16 (the "only" pass path), multi-pass blocks, the 48×48·48×64 example, back-to-back
   GEMMs, extreme values (all −128, all 127), and gaps between passes (bubbles must not touch the accumulator).
@@ -532,8 +574,8 @@ address and pushes into the same input streams, with no engine change. Alternati
   accept and an end in the same cycle (one leaves a cycle late, nothing lost); the buffer-overflow assertion
   never fires.
 - **Edge tiles:** M, K, N not multiples of 16, including sizes 1, 15, 17 and k-size / n-size ≤ 8 (C out R idle).
-- **Abort:** mid-pass, during a weight load and with a full descriptor queue (3 aborted end responses, one per
-  cycle); then a new GEMM must produce a correct C (no stale state).
+- **Abort:** mid-pass, during a weight load and with a full descriptor queue (up to 4 aborted end responses, one
+  per cycle); then a new GEMM must produce a correct C (no stale state).
 - **Input streams:** random `valid` gaps on A and B (passes may only start on whole tiles), sustained full rate
   (no bubbles once the banks are primed), and ring-buffer wraparound, including tiles that straddle the wrap point.
 - **Random tests:** random M, K, N (any value, weighted toward small and edge sizes) and random data; Icarus for directed runs, Verilator for long
@@ -541,6 +583,21 @@ address and pushes into the same input streams, with no engine change. Alternati
 - **Memories in `RDW_X=1` mode** for every regression.
 - **Lint:** `verilator --lint-only -Wall` clean.
 - **Performance check:** measured cycles vs the §8.4 model.
+
+### Bring-up results
+An end-to-end testbench drove `gemm_top` (all controllers, banks, skews, the real array and the accumulator) from
+descriptors and A/B streams that follow the stream contract (lanes outside a tile carry garbage), with all
+SRAMs in both `RDW_X` modes, and compared against an exact reference GEMM:
+- every C half-row on `c0`/`c1` (values in valid lanes, cycle, no extra rows), every block header, every `out_ack`
+  and every response (accept warnings, end status, order); also each pass's psums at the array and de-skew
+  outputs, the `a_first` diagonal, the pass command fields and the WC/AC tile tags;
+- shapes: 48×48×48, edge shapes (sizes 1–16 and non-multiples of 16, K < 16 straight after reset), random
+  shapes up to 100 with up to 8 GEMMs per run, random gaps on both streams, K = 65 536 (field 0) with
+  all −128 × −128 (C = 2³⁰) and −128 × 127;
+- control: back-to-back GEMMs, `out_ack`/accept collisions, aborts swept over every pass phase and with 0–4 GEMMs
+  outstanding (incl. a tile latched but its pass not started, which needs the dummy `a_first`);
+- mutants (no dummy `a_first`, clearing in-flight `a_first` on abort, wrong output timing or fields) are caught.
+All runs pass. Performance: §8.4.
 
 ### Milestones
 1. Spec (this document) written.
@@ -568,9 +625,9 @@ Metrics, recorded for both versions:
 
 | # | Item | Needed before |
 |---|---|---|
-| 1 | Edge blocks with n-size < 16: per-lane valids on `c0_out` / `c1_out`, or "columns ≥ n are undefined, downstream knows N" (§9.3) | milestone 3 |
+| 1 | ~~Edge blocks with n-size < 16: per-lane valids, or "columns ≥ n are undefined"~~ Resolved: n-size on the output block header `c_hdr`; lanes beyond it are undefined (§10) | — |
 | 2 | OC delay mechanism (valid + command pipeline alongside the array, or a small queue) and the TC → unit handshake details (§9.3) | P1 control |
-| 3 | Output end-of-block / end-of-GEMM marker (`c_last`) for downstream, needed with back-to-back GEMMs | milestone 3 |
+| 3 | ~~Output end-of-block / end-of-GEMM marker (`c_last`)~~ Resolved: one block header per block (position bits, sizes, ID); downstream counts m-size rows (§10) | — |
 | 4 | Exact A/B bank depth (≥ 24, §7.2): how much upstream jitter to absorb | milestone 3 |
 | 5 | Back-to-back GEMMs: preload the next GEMM's first weights during the current one's last passes | milestone 3 |
 | 6 | ~~Owner of the WC ↔ AC interlock~~ Resolved: direct signals between WC and AC (§9.1) | — |
@@ -610,4 +667,7 @@ Metrics, recorded for both versions:
 | Input streams carry data only; units report rows, TC derives tile boundaries | Matches a plain DMA stream; consistency is software's job, as in commercial designs. Markers stay a later debug option |
 | WC ↔ AC interlock as two direct signals ("weights loaded", "pass started") | Local to two neighbouring units; TC stays a pure sequencer |
 | End response on OC's `out_ack` {ID}, triggered by a `gemm_last` bit in the OC command | "Done" means the last C row has left; TC can't know that at issue time, and with back-to-back GEMMs the ack needs the ID |
+| One output block header (`c_hdr`) per block on the `c0` timeline, not per-stream or per-beat markers | `c1` row x is always `c0` row x + 8 and every block has a `c0` row, so one 16-bit header describes both halves; per-stream fields would cost 20 b and say the same. Downstream counts rows and uses the fixed offset; if the halves ever drift apart (output backpressure, v2's independent cores), per-stream fields come back |
+| Block header carries position bits (`r_first`/`r_last`/`n_first`/`n_last`), m-size, n-size and the descriptor ID, not the pass tag | Enough to find GEMM starts and ends, valid lanes and block boundaries, and to resync after an abort. The tag is an internal pass counter that downstream can't match to anything; the ID is host-chosen and appears on `resp` |
+| ID uniqueness is a host convention, not checked | Cheap; GEMMs finish in order, so order is a fallback when IDs repeat |
 | One broadcast `w_latch` pulse, timed as in an N×N array | The PEs carry it one column per cycle, and the bank-R read offset + triangle give columns 8–15 the same skew as a 0→15 triangle |

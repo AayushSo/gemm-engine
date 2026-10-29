@@ -193,6 +193,10 @@ assign acmd_data.last = loop_k_end;
 assign acmd_data.gemm_last = loop_k_end && loop_m_end && loop_n_end;
 assign acmd_data.n_size = loop_n_end  ? cmd_r.n[SIZE_W-1:0] : 'd0;
 assign acmd_data.id = cmd_r.id;
+assign acmd_data.r_first = cmd_M == 'd1;
+assign acmd_data.r_last  = loop_m_end;
+assign acmd_data.n_first = cmd_N == 'd1;
+assign acmd_data.n_last  = loop_n_end;
 
 // Pending response FIFO: IDs of outstanding GEMMs, oldest at the head
 
