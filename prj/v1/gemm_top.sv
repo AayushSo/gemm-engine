@@ -41,6 +41,7 @@ localparam ADDR_D = $clog2(ACC_DEPTH);
 // Interfaces
 
 wcmd_t wcmd_data;
+acmd_t acmd_data;
 //resp_t resp_data;
 
 // Regs
@@ -106,6 +107,8 @@ wire [A_AW-1:0] a0_raddr, a1_raddr;
 wire [ADDR_D-1:0] c0_raddr, c1_raddr;
 
 wire wcmd_valid, wcmd_stall;
+wire acmd_valid, acmd_stall;
+wire ld_go;
 //wire resp_valid;
 
 // Renvars
@@ -348,7 +351,7 @@ u_weight_controller
 	.rst(rst),
 	.abort_req(abort_req),
 	.wcmd_data(wcmd_data),
-	.wcmd_valid(wcmd_valid),
+	.wcmd_valid(wcmd_valid &~ acmd_stall),
 	.wcmd_stall(wcmd_stall),
 	.w_valid(w_valid),
 	.w_stall(w_stall),
@@ -365,7 +368,7 @@ u_weight_controller
 	.w1_waddr_out(w1_waddr), 
 	.w0_raddr_out(w0_raddr), 
 	.w1_raddr_out(w1_raddr),
-	.ld_go (1'b1)
+	.ld_go (ld_go)
 	);
 
 
@@ -380,17 +383,28 @@ u_act_controller
 (
 	.clk(clk), 
 	.rst(rst),
+	.abort_req(abort_req),
+	// input activation data dVS signalling
 	.a_valid(a_valid),
 	.a_stall(a_stall),
+	// SA control signals
 	.a_first(a_first),
+	.dummy_a_first(dummy_a_first),
+	.weight_stall(weight_stall),
+	.ld_go(ld_go),
+	// top -> acmd intf
+	.acmd_data(acmd_data),
+	.acmd_valid(acmd_valid &~ wcmd_stall),
+	.acmd_stall(acmd_stall),
+	// activation RAM controls
 	.a0_wen(a0_wen),
 	.a1_wen(a1_wen),  
 	.a0_ren(a0_ren),  
 	.a1_ren(a1_ren),  
-	.a0_waddr(a0_waddr), 
-	.a1_waddr(a1_waddr), 
-	.a0_raddr(a0_raddr), 
-	.a1_raddr(a1_raddr) 
+	.a0_waddr_out(a0_waddr), 
+	.a1_waddr_out(a1_waddr), 
+	.a0_raddr_out(a0_raddr), 
+	.a1_raddr_out(a1_raddr) 
 	);
 
 ////////////////////////  Out Controller
@@ -430,10 +444,14 @@ u_top_controller
 	// Response bus
 	.resp_data(resp_data),
 	.resp_valid(resp_valid),
-	// Weight controller connection
+	// weight controller connection
 	.wcmd_data(wcmd_data),
 	.wcmd_valid(wcmd_valid),
 	.wcmd_stall(wcmd_stall),
+	// act controller connection
+	.acmd_data(acmd_data),
+	.acmd_valid(acmd_valid),
+	.acmd_stall(acmd_stall),
 	.abort_req(abort_req),
 	.out_ack(1'b0)
 	);

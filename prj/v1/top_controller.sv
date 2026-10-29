@@ -24,6 +24,10 @@ import gemm_v1_pkg::*;
 	output wcmd_t wcmd_data,
 	output reg wcmd_valid,
 	input wcmd_stall,
+	// act controller bus DVS
+	output acmd_t acmd_data,
+	output reg acmd_valid,
+	input acmd_stall,
 	// ack bus DV
 	output resp_t resp_data,
 	output reg resp_valid,
@@ -90,6 +94,7 @@ always@* begin
 	cmd_r_next = cmd_r;
 	tag_next   = tag;
 	wcmd_valid = 1'b0;
+	acmd_valid = 1'b0;
 	pend_wen   = 1'b0;
 	resp_data_next.id = cmd_r.id;
 	resp_data_next.done = 'd0;
@@ -121,7 +126,8 @@ always@* begin
 			end
 		ST_K : begin
 				wcmd_valid = 1'b1;
-				if (!wcmd_stall) begin
+				acmd_valid = 1'b1;
+				if (!wcmd_stall &~ acmd_stall) begin
 					tag_next   = tag + 1'b1;
 					cmd_K_next = cmd_K + 'd1;
 					if (loop_k_end) begin // inner loop completed
@@ -179,10 +185,9 @@ assign wcmd_data.tag = tag;
 
 // TODO : instantiate acmd
 // TODO : acmd should be 1 cyc delayed? add buffer if needed
-//assign acmd_data.k_size = (cmd_r.k>>SIZE_W)== cmd_K  ? cmd_r.k[SIZE_W-1:0]] : 'd0;
-//assign acmd_data.m_size = (cmd_r.m>>SIZE_W)== cmd_M  ? cmd_r.m[SIZE_W-1:0]] : 'd0;
-//assign acmd_data.tag = tag;
-
+assign acmd_data.k_size = loop_k_end  ? cmd_r.k[SIZE_W-1:0] : 'd0;
+assign acmd_data.m_size = loop_m_end  ? cmd_r.m[SIZE_W-1:0] : 'd0;
+assign acmd_data.tag = tag;
 
 // Pending response FIFO: IDs of outstanding GEMMs, oldest at the head
 
