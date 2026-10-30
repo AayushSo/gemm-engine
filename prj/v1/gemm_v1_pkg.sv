@@ -154,6 +154,7 @@ typedef struct packed {
 
 localparam int CMD_W  = $bits(cmd_t);		// 52
 localparam int RESP_W = $bits(resp_t);		// 8
+localparam int WCMD_W  = $bits(wcmd_t);		// 11
 localparam int OCMD_W  = $bits(ocmd_t);		// 22
 localparam int ACMD_W  = $bits(acmd_t);		// 26
 localparam int C_HDR_W = $bits(c_hdr_t);	// 16

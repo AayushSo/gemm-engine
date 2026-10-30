@@ -100,6 +100,7 @@ wire [T-1:0] a_first;
 wire w_latch, weight_stall;
 wire dummy_a_first;
 wire w0_zero, w1_zero;
+wire [T-1:0] w_col_mask;
 
 wire        [IN_W-1:0] act0_in [S-1:0];
 wire        [IN_W-1:0] act1_in [S-1:0];
@@ -222,8 +223,8 @@ generate
 	for(i=0;i<S;i++) begin
 		assign w0_wdata[IN_W*(i+1)-1:IN_W*i] = w_data [i];
 		assign w1_wdata[IN_W*(i+1)-1:IN_W*i] = w_data [S+i];
-		assign weight0_in[i] = w0_zero ? 'd0 : w0_rdata[IN_W*(i+1)-1:IN_W*i];
-		assign weight1_in[i] = w1_zero ? 'd0 : w1_rdata[IN_W*(i+1)-1:IN_W*i];
+		assign weight0_in[i] = w0_zero || w_col_mask[i]   ? 'd0 : w0_rdata[IN_W*(i+1)-1:IN_W*i];
+		assign weight1_in[i] = w1_zero || w_col_mask[S+i] ? 'd0 : w1_rdata[IN_W*(i+1)-1:IN_W*i];
 	end
 endgenerate
 
@@ -377,6 +378,7 @@ u_weight_controller
 	.w_latch(w_latch),
 	.w0_zero(w0_zero),
 	.w1_zero(w1_zero),
+	.w_col_mask(w_col_mask),
 	.w0_wen(w0_wen),
 	.w1_wen(w1_wen),  
 	.w0_ren(w0_ren),  

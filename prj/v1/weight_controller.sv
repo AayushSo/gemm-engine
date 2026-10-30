@@ -24,6 +24,7 @@ import gemm_v1_pkg::*;
 	output w0_wen, w1_wen,
 	output w0_ren, w1_ren,
 	output logic w0_zero, w1_zero,
+	output logic [T-1:0] w_col_mask,
 	output logic [W_AW-1:0] w0_waddr_out,w0_raddr_out,
 	output logic [W_AW-1:0] w1_waddr_out,w1_raddr_out,
 	input ld_go
@@ -38,9 +39,13 @@ logic [W_AW:0] w_used;			// rows written, not yet read by bank R (0..W_DEPTH)
 // The FIFO entry holds the tile's row count (ks):
 // the active load needs ks for the edge-tile read window.
 logic [SIZE_W:0] pend_cmd_rdata__ks;	// 1..16
+logic [SIZE_W:0] pend_cmd_rdata__ns;	// 1..16
+logic [SIZE_W:0] pend_cmd_rdata__ns__d1;	// 1..16
+logic [SIZE_W:0] pend_cmd_rdata__ns__d2;	// 1..16
 
 // Entry is {ks, tag}
-logic [SIZE_W+$bits(tag_t):0] pend_cmd_rdata;
+//logic [SIZE_W+$bits(tag_t):0] pend_cmd_rdata;
+wcmd_t pend_cmd_rdata;
 tag_t pend_cmd_rdata__tag;
 
 logic [$clog2(T):0] w0_ctr;		// 0 = idle, 1..16 = cycle of the current load
@@ -60,8 +65,10 @@ logic [W_AW:0] w0_raddr_next,w1_raddr_next;
 logic [SIZE_W:0] wcmd_data__k_size;
 logic abort_sig_hold_w;
 
+genvar i;
 
-sync_fifo #(.W(SIZE_W+1 + $bits(tag_t)), .DEPTH(PEND_DEPTH))
+//sync_fifo #(.W(SIZE_W+1 + $bits(tag_t)), .DEPTH(PEND_DEPTH))
+sync_fifo #(.W(WCMD_W), .DEPTH(PEND_DEPTH))
 u_pend_cmd_fifo (
             .clk(clk),
             .rst(rst),
@@ -69,17 +76,30 @@ u_pend_cmd_fifo (
             .ren(pend_cmd_ren),
             .rdata(pend_cmd_rdata),
             .wen(wcmd_valid && !wcmd_stall),
-            .wdata({wcmd_data__k_size,wcmd_data.tag}),
+            //.wdata({wcmd_data__k_size,wcmd_data.tag}),
+            .wdata(wcmd_data),
             .full(pend_cmd_full),
             .empty(pend_cmd_empty),
             .count()
             );
 
-assign pend_cmd_rdata__tag = pend_cmd_rdata[$bits(tag_t)-1:0];
-assign pend_cmd_rdata__ks = pend_cmd_rdata[SIZE_W+$bits(tag_t):$bits(tag_t)];
 assign pend_cmd_ren = (w0_ctr_next==T);	// pop out cmd
-assign wcmd_data__k_size[SIZE_W] = wcmd_data.k_size == 'd0 ? 1'b1 : 1'b0; 
-assign wcmd_data__k_size[SIZE_W-1:0] = wcmd_data.k_size; 
+//assign pend_cmd_rdata__tag = pend_cmd_rdata[$bits(tag_t)-1:0];
+//assign pend_cmd_rdata__ks = pend_cmd_rdata[SIZE_W+$bits(tag_t):$bits(tag_t)];
+//assign wcmd_data__k_size[SIZE_W] = wcmd_data.k_size == 'd0 ? 1'b1 : 1'b0; 
+//assign wcmd_data__k_size[SIZE_W-1:0] = wcmd_data.k_size; 
+assign pend_cmd_rdata__tag = pend_cmd_rdata.tag;
+assign pend_cmd_rdata__ks[SIZE_W] = pend_cmd_rdata.k_size == 'd0 ? 1'b1 : 1'b0;
+assign pend_cmd_rdata__ks[SIZE_W-1:0] = pend_cmd_rdata.k_size; 
+assign pend_cmd_rdata__ns[SIZE_W] = pend_cmd_rdata.n_size == 'd0 ? 1'b1 : 1'b0;
+assign pend_cmd_rdata__ns[SIZE_W-1:0] = pend_cmd_rdata.n_size;
+
+generate
+	for (i=0;i<S;i++) begin
+		assign w_col_mask[  i] =   i >= pend_cmd_rdata__ns__d1;
+		assign w_col_mask[S+i] = S+i >= pend_cmd_rdata__ns__d2; // accounting for bank R being 8 cyc behind bank L
+	end
+endgenerate
 
 assign w0_waddr_out = w0_waddr[W_AW-1:0];
 assign w1_waddr_out = w1_waddr[W_AW-1:0];
@@ -110,6 +130,8 @@ always@(posedge clk) begin
 		w1_raddr <= 'd0;
 		w_latch <= 'd0;
 		weight_stall <= 'd0;
+		pend_cmd_rdata__ns__d1 <= 'd0;
+		pend_cmd_rdata__ns__d2 <= 'd0;
 	end
 	else begin
 		w0_ctr <= w0_ctr_next;
@@ -123,6 +145,8 @@ always@(posedge clk) begin
 		w1_raddr <= w1_raddr_next;
 		weight_stall <= weight_stall ? ~ld_go : (w0_ctr_next == T);
 		w_latch <= (w0_ctr == T);
+		pend_cmd_rdata__ns__d1 <= (w0_ctr_next==  1) ? pend_cmd_rdata__ns     : pend_cmd_rdata__ns__d1 ;
+		pend_cmd_rdata__ns__d2 <= (w0_ctr_next==S+1) ? pend_cmd_rdata__ns__d1 : pend_cmd_rdata__ns__d2 ;
 	end
 end
 
