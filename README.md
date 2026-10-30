@@ -73,6 +73,7 @@ The input streams carry data only: the engine knows every tile boundary from the
 | Path | Contents |
 |---|---|
 | `docs/spec.md` | v1 specification: architecture, dataflow, control, interfaces, verification plan, decision log |
+| `docs/microarch.pdf` (`.docx`) | Microarchitecture document: block diagrams, interfaces, timing, synthesis results |
 | `rtl/` | Generic modules shared by all versions (no project package) |
 | `rtl/pe.sv`, `rtl/systolic.sv` | Processing element with double-buffered weights; M×M array of PEs |
 | `rtl/skew.sv`, `rtl/delay_line.sv` | Skew/de-skew triangles built from parameterized delay lines |
@@ -82,8 +83,9 @@ The input streams carry data only: the engine knows every tile boundary from the
 | `prj/v1/gemm_v1_pkg.sv` | Widths, geometry, bank depths, descriptor/command/response formats |
 | `prj/v1/gemm_top.sv` | Top level: array, skew, banks, controllers |
 | `prj/v1/top_controller.sv` | Descriptor sequencer: tile loops, pass commands, responses, abort |
-| `prj/v1/weight_controller.sv`, `activation_controller.sv`, `out_controller.sv` | Unit controllers (in progress) |
+| `prj/v1/weight_controller.sv`, `activation_controller.sv`, `out_controller.sv` | Unit controllers |
 | `prj/v1/v1.f` | Design file list |
+| `syn/` | Synthesis and timing with OpenROAD-flow-scripts (Nangate45): config, constraints, run script |
 
 ## Running
 
@@ -98,6 +100,12 @@ verilator --lint-only -Wall -f prj/v1/v1.f --top-module gemm_top
 ```
 Verilator reports width and unused-signal warnings; a lint clean-up is pending.
 
+Synthesis and pre-layout timing run in the OpenROAD-flow-scripts Docker image (needs Docker); reports go to
+`build/syn/reports/`:
+```
+syn/run.sh
+```
+
 ## Status
 
 | Milestone | State |
@@ -110,7 +118,8 @@ Verilator reports width and unused-signal warnings; a lint clean-up is pending.
 | End-to-end checks: reference matmul, edge shapes, K = 65 536, aborts, back-to-back GEMMs | Passing (bring-up testbenches, not part of the repository) |
 | Performance against the cycle model | Done: 16 cycles/pass, 90% at 48×48 · 48×64 |
 | Lint clean-up | To do |
-| Synthesis / PPA, then v2 | Planned |
+| Synthesis (Nangate45, pre-layout) | Done: 0.42 mm² of cells, 1.705 ns minimum period (≈ 585 MHz) |
+| Place and route, then v2 | Planned |
 
 ## Roadmap: v2
 
@@ -118,7 +127,7 @@ v2 rebuilds the same 16×16 array from four 8×8 instances of the same `pe` / `s
 the core boundaries, so the cores can run independently or be regrouped (N-split, K-split) for small or
 odd shapes. Because both versions share the core RTL, the cost of that flexibility (area, timing, control
 complexity) can be measured directly against the utilization it buys. Later items: DMA/AXI front end,
-synthesis with an open-source flow, and output backpressure.
+place and route with the same open-source flow, and output backpressure.
 
 ## License
 
