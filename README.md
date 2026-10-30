@@ -119,3 +119,7 @@ the core boundaries, so the cores can run independently or be regrouped (N-split
 odd shapes. Because both versions share the core RTL, the cost of that flexibility (area, timing, control
 complexity) can be measured directly against the utilization it buys. Later items: DMA/AXI front end,
 synthesis with an open-source flow, and output backpressure.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
