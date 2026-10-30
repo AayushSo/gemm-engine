@@ -11,5 +11,10 @@ obj_dir/
 *.fst
 *.log
 
+# microarchitecture doc generator and diagram sources
+docs/microarch/
+# Word lock files
+~$*
+
 # Jupyter autosave
 .ipynb_checkpoints/
