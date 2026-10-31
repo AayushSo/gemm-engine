@@ -4,9 +4,10 @@ A tiled integer GEMM accelerator in SystemVerilog, built around a 16×16 weight-
 with double-buffered weights. It computes **C = A · B** for signed int8 matrices of any shape
 (M, K, N from 1 to 65 536) with exact int32 results, streaming tiles through the array back to back.
 
-> **Status:** work in progress. The v1 design is complete (array, banks, top/weight/activation/output
-> controllers and accumulator) and passes end-to-end checks against a reference matmul. See [Status](#status).
-> The full specification is in [`docs/spec.md`](docs/spec.md).
+The design is verified against a reference matmul and taken through synthesis, place and route, gate-level
+simulation and power analysis with an open-source flow (OpenROAD, Nangate45) meeting **770 MHz on a 0.50 mm² die**.
+The [microarchitecture document](docs/microarch.pdf) describes the design; [`docs/implementation.md`](docs/implementation.md)
+records the implementation flow and results.
 
 ## At a glance
 
@@ -17,35 +18,19 @@ with double-buffered weights. It computes **C = A · B** for signed int8 matrice
 | GEMM shapes | Any M, K, N in 1 … 65 536; edge tiles are zero-padded in hardware |
 | Dataflow | k-innermost tiling; 16 A rows per weight tile ("pass"), one pass every 16 cycles |
 | Weight loads | Hidden behind compute: each PE double-buffers its weight, so the next tile loads while the current one computes |
-| Buffers | 1R1W SRAM banks (behavioral models): A and B ring buffers (2 × 32 rows each), 1 KB accumulator |
+| Buffers | 1R1W banks: A and B ring buffers (2 × 32 rows each), 1 KB accumulator; flop arrays in synthesis |
 | Control | One descriptor per GEMM {ID, M, K, N}; accept/end responses; abort |
-| Throughput | 16 cycles per pass, ≈ 16 · (M/16)(N/16)(K/16) + 64 cycles of fill and drain; measured 90% at 48×48 · 48×64, 97% for four back to back |
+| Throughput | ≈ 16 · ⌈M/16⌉⌈N/16⌉⌈K/16⌉ + 64 cycles; measured 90% at 48×48 · 48×64, 97% for four back to back |
+| Implementation | 1.30 ns (770 MHz), 0.50 mm² die, Nangate45 typical corner; routed netlist bit-exact at gate level |
+| Power | 168 mW at 500 MHz on an image filter bank (150 mW without the flop-based buffers) |
 
 ## Architecture
 
-```
-                          B stream in (16 × int8 per beat)
-                     ┌───────────┴───────────┐
-              B bank L (N 0-7)        B bank R (N 8-15)    <- bank R read 8 cycles later
-                     │ 0→7 skew              │ 0→7 skew
-                     ▼                       ▼
-                 ┌──────────────────────────────────────┐
- A bank T  ─0→7─►│  rows 0-7                             │
- (K 0-7)    skew │      16×16 weight-stationary array    │
- A bank B  ─0→7─►│  rows 8-15                            │
- (K 8-15)   skew │  cols 0-7                 cols 8-15   │
-                 └──────────┬─────────────────────┬──────┘
-                            │ 7→0 de-skew         │ 7→0 de-skew
-                            ▼                     ▼
-                 ACC bank L (C 0-7)      ACC bank R (C 8-15)   <- read-modify-write
-                            │                     │
-                            ▼                     ▼
-                 C out L (cols 0-7)      C out R (cols 8-15)   <- two half-row streams, 8 cycles apart
-```
+![gemm_top: datapath and control](docs/img/gemm_top.svg)
 
-- **Width-split banks.** Every buffer is split into two 8-lane halves. The upper half's extra 8 cycles of skew
-  come from reading its bank 8 cycles later, so only two 0→7 skew triangles are needed per path instead of a
-  0→15 triangle.
+- **Width-split banks.** Every buffer is split into two 8-lane halves, bank 0 and bank 1. Bank 1 is read
+  8 cycles after bank 0, which supplies the upper half's extra skew, so each path needs only two 0→7 skew
+  triangles instead of a 0→15 one.
 - **Tiling.** For each C block (r, n), the engine runs K/16 passes. Each pass holds one 16×16 B tile in the
   array, streams the matching 16 rows of A through it, and accumulates into the 16×16 int32 accumulator.
   The last pass of a block sends the result straight to the C output instead of writing it back.
@@ -68,67 +53,85 @@ with double-buffered weights. It computes **C = A · B** for signed int8 matrice
 The input streams carry data only: the engine knows every tile boundary from the descriptor, and upstream
 (a testbench now, a DMA later) sends tiles in the loop order. DVS = data/valid/stall; DV = data/valid.
 
+## Results
+
+| | |
+|---|---|
+| Verification | End-to-end against a reference matmul: shapes 1–100 per dimension, K = 65 536, back-to-back GEMMs, aborts swept over every pass phase; a real workload (16 3 × 3 image filters via im2col) bit-exact on the RTL and the routed netlist |
+| Timing | 1.30 ns (770 MHz) after routing, setup and hold met; critical path: PE weight register → 8 × 8 multiply → psum add |
+| Area | 389 966 µm² of cells on a 0.50 mm² die (79% utilization) |
+| Power at 500 MHz | 257 mW on random int8 GEMMs, 168 mW on the image filter bank, 57 mW idle (gate-level simulation) |
+| Workloads | At 500 MHz: 4K grayscale video at 60 fps through the 16-filter bank; ResNet-18 at about 65 images/s (99 at 770 MHz, cycle model) |
+
 ## Repository layout
 
-| Path | Contents |
-|---|---|
-| `docs/spec.md` | v1 specification: architecture, dataflow, control, interfaces, verification plan, decision log |
-| `docs/microarch.pdf` (`.docx`) | Microarchitecture document: block diagrams, interfaces, timing, synthesis results |
-| `rtl/` | Generic modules shared by all versions (no project package) |
-| `rtl/pe.sv`, `rtl/systolic.sv` | Processing element with double-buffered weights; M×M array of PEs |
-| `rtl/skew.sv`, `rtl/delay_line.sv` | Skew/de-skew triangles built from parameterized delay lines |
-| `rtl/ram_1r1w.sv` | 1R1W SRAM wrapper (behavioral; can be swapped for a macro), optional X on read-during-write |
-| `rtl/sync_fifo.sv` | Small flop-based FIFO for control queues |
-| `prj/v1/` | GEMM engine v1: package, top level and controllers |
-| `prj/v1/gemm_v1_pkg.sv` | Widths, geometry, bank depths, descriptor/command/response formats |
-| `prj/v1/gemm_top.sv` | Top level: array, skew, banks, controllers |
-| `prj/v1/top_controller.sv` | Descriptor sequencer: tile loops, pass commands, responses, abort |
-| `prj/v1/weight_controller.sv`, `activation_controller.sv`, `out_controller.sv` | Unit controllers |
-| `prj/v1/v1.f` | Design file list |
-| `syn/` | Synthesis and timing with OpenROAD-flow-scripts (Nangate45): config, constraints, run script |
+```
+.
+├── docs/
+│   ├── microarch.pdf (.docx)     Microarchitecture document: design, interfaces, timing, results
+│   ├── implementation.md         Implementation flow: synthesis, place and route, gate-level sim, power
+│   ├── spec.md                   Original v1 specification and decision log
+│   └── img/                      Top-level diagram
+├── rtl/                          Generic modules shared by all versions (no project package)
+│   ├── pe.sv                     Processing element with double-buffered, clock-gated weights
+│   ├── systolic.sv               M×M array of PEs
+│   ├── skew.sv                   Skew/de-skew triangles
+│   ├── delay_line.sv             Parameterized delay line (skew building block)
+│   ├── ram_1r1w.sv               1R1W SRAM wrapper (behavioral; can be swapped for a macro)
+│   └── sync_fifo.sv              Small flop-based FIFO for control queues
+├── prj/v1/                       GEMM engine v1
+│   ├── gemm_v1_pkg.sv            Widths, geometry, bank depths, descriptor/command/response formats
+│   ├── gemm_top.sv               Top level: array, skew, banks, controllers
+│   ├── top_controller.sv         Descriptor sequencer: tile loops, pass commands, responses, abort
+│   ├── weight_controller.sv      B banks, weight tile loads, column mask
+│   ├── activation_controller.sv  A banks, pass start, a_first wavefront
+│   ├── out_controller.sv         Accumulation, C output, block header
+│   └── v1.f                      Design file list
+├── syn/                          Synthesis, place and route with OpenROAD-flow-scripts (Nangate45)
+│   ├── config.mk                 ORFS design config
+│   ├── constraint.sdc            Clock and I/O constraints
+│   ├── run.sh                    Runs ORFS in Docker: synthesis, timing, place and route
+│   ├── sta.tcl                   Pre-layout timing report
+│   └── area_by_module.py         Per-block area from a hierarchical synthesis
+├── LICENSE
+└── README.md
+```
 
 ## Running
 
 Requires [Icarus Verilog](https://github.com/steveicarus/iverilog) 12 and/or
 [Verilator](https://www.veripool.org/verilator/) 5. Run from the repository root.
 
-The repository holds the design only. The testbenches used to bring it up are not part of it; [`docs/spec.md`](docs/spec.md) §11 records the verification plan and what was run. These commands elaborate and lint the design:
+The repository holds the design only; the testbenches used to bring it up are not part of it. These commands
+elaborate and lint the design:
 ```
 mkdir -p build
 iverilog -g2012 -c prj/v1/v1.f -s gemm_top -o build/gemm_top.vvp
 verilator --lint-only -Wall -f prj/v1/v1.f --top-module gemm_top
 ```
-Verilator reports width and unused-signal warnings; a lint clean-up is pending.
+Verilator reports width and unused-signal warnings; none is a functional bug.
 
-Synthesis and pre-layout timing run in the OpenROAD-flow-scripts Docker image (needs Docker); reports go to
-`build/syn/reports/`:
+Synthesis and timing run in the OpenROAD-flow-scripts Docker image (needs Docker); results go to `build/syn/`.
+Pre-layout synthesis and timing, then the final layout:
 ```
 syn/run.sh
+LEC_CHECK=0 INFER_CLKGATES=1 HOLD_SLACK_MARGIN=0.05 SETUP_SLACK_MARGIN=0.01 CORE_UTILIZATION=75 PLACE_DENSITY=0.82 \
+    VARIANT=cg_pnr_1300_u75s CLK_PERIOD=1.3 syn/run.sh pnr
 ```
 
-## Status
+## Roadmap
 
-| Milestone | State |
-|---|---|
-| Specification (`docs/spec.md`) | Draft; some controller sections still to be brought up to date |
-| PE, array, skew, SRAM wrapper, FIFO | Done |
-| Top level wiring | Done |
-| Top controller: loops, pass commands, responses, abort | Done |
-| Weight, activation and output controllers, accumulator | Done |
-| End-to-end checks: reference matmul, edge shapes, K = 65 536, aborts, back-to-back GEMMs | Passing (bring-up testbenches, not part of the repository) |
-| Performance against the cycle model | Done: 16 cycles/pass, 90% at 48×48 · 48×64 |
-| Lint clean-up | To do |
-| Synthesis (Nangate45, pre-layout) | Done: 0.42 mm² of cells, 1.705 ns minimum period (≈ 585 MHz) |
-| Place and route, then v2 | Planned |
-
-## Roadmap: v2
-
-v2 rebuilds the same 16×16 array from four 8×8 instances of the same `pe` / `systolic` RTL, with muxes at
-the core boundaries, so the cores can run independently or be regrouped (N-split, K-split) for small or
-odd shapes. Because both versions share the core RTL, the cost of that flexibility (area, timing, control
-complexity) can be measured directly against the utilization it buys. Later items: DMA/AXI front end,
-place and route with the same open-source flow, and output backpressure.
+- **v1.1:** int32 → int8 requantization and activation at the output controller, so one layer's output can
+  feed the next.
+- **Power:** gate the whole array's clock when no pass is in flight; mask padding lanes; SRAM macros for the
+  buffers.
+- **v2:** the same 16×16 array rebuilt from four 8×8 instances of the same `pe` / `systolic` RTL, with muxes at
+  the core boundaries, so the cores can run independently or be regrouped (N-split, K-split) for small or odd
+  shapes. Sharing the core RTL lets the cost of that flexibility (area, timing, control) be measured directly
+  against the utilization it buys.
+- Later: DMA/AXI front end, output backpressure, a Python layer that lowers convolutions and einsums to the
+  engine's streams.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT License, see [LICENSE](LICENSE).
