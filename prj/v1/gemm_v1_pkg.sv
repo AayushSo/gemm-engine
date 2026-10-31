@@ -33,7 +33,7 @@ localparam int ACC_DEPTH = R;		// accumulator words per bank
 localparam int ACC_AW    = $clog2(ACC_DEPTH);	// 4
 
 // ---- output timing (cycles after AC's go, i.e. the cycle ocmd_valid is high) ----
-// go -> a_first[0] at the array: 1 (AC's a_first register); row x, column i leaves the array T cycles
+// go -> a_first[0] at the array: 0 (AC's a_first output signal, shifted one cycle due to long path fix); row x, column i leaves the array T cycles
 // later (+x+i); the output de-skew delays column j of each half by S-1-j, so half 0's row x reaches
 // the OC at go + OC_PSUM_LAT + x and half 1's row x S cycles after that.
 localparam int OC_PSUM_LAT = 1 + T + (S-1);		// 24: half-0 row 0 at the OC input

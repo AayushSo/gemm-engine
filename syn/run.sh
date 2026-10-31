@@ -12,6 +12,8 @@
 #                                                 gives the per-module area
 #   LEC_CHECK=0 syn/run.sh pnr                    skip ORFS's final equivalence check (it needs more
 #                                                 than the 8 GB Docker has on this design)
+#   INFER_CLKGATES=1 syn/run.sh                   map flop enables to clock-gating cells (yosys clockgate)
+#   HOLD_SLACK_MARGIN=0.05 syn/run.sh pnr         repair hold to this margin (ns) instead of 0
 #   ORFS_IMAGE=openroad/orfs:<tag> syn/run.sh     ORFS image (default below)
 #
 # Outputs, per variant: build/syn/{logs,reports,results,objects}/nangate45/gemm_v1/<variant>/
@@ -47,7 +49,7 @@ mkdir -p build/syn
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE"
 
 # env passed into the container (empty values are ignored by ORFS / the SDC)
-ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE -e LEC_CHECK)
+ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE -e LEC_CHECK -e INFER_CLKGATES -e HOLD_SLACK_MARGIN)
 
 docker run --rm -v "$REPO":/work -w /OpenROAD-flow-scripts/flow "${ENVS[@]}" "$IMAGE" bash -c "
 	set -euo pipefail

@@ -76,7 +76,6 @@ u_pend_cmd_fifo (
             .ren(pend_cmd_ren),
             .rdata(pend_cmd_rdata),
             .wen(wcmd_valid && !wcmd_stall),
-            //.wdata({wcmd_data__k_size,wcmd_data.tag}),
             .wdata(wcmd_data),
             .full(pend_cmd_full),
             .empty(pend_cmd_empty),
@@ -84,10 +83,6 @@ u_pend_cmd_fifo (
             );
 
 assign pend_cmd_ren = (w0_ctr_next==T);	// pop out cmd
-//assign pend_cmd_rdata__tag = pend_cmd_rdata[$bits(tag_t)-1:0];
-//assign pend_cmd_rdata__ks = pend_cmd_rdata[SIZE_W+$bits(tag_t):$bits(tag_t)];
-//assign wcmd_data__k_size[SIZE_W] = wcmd_data.k_size == 'd0 ? 1'b1 : 1'b0; 
-//assign wcmd_data__k_size[SIZE_W-1:0] = wcmd_data.k_size; 
 assign pend_cmd_rdata__tag = pend_cmd_rdata.tag;
 assign pend_cmd_rdata__ks[SIZE_W] = pend_cmd_rdata.k_size == 'd0 ? 1'b1 : 1'b0;
 assign pend_cmd_rdata__ks[SIZE_W-1:0] = pend_cmd_rdata.k_size; 

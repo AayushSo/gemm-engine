@@ -6,7 +6,7 @@
 	* Out Controller
 Command list:
 	1. Load weights : weight size
-Responses (spec §9.6):
+Responses :
 	* accept : {ID, 0, warnings}, sent when the descriptor is taken
 	* end    : {ID, 1, OK} on out_ack (in order), or {ID, 1, ABORTED} for every outstanding ID on abort
 	Outstanding IDs (running + issued, waiting for out_ack) are held in a FIFO, pushed at accept.

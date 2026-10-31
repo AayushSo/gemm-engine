@@ -17,14 +17,10 @@ Output :
         b_out (weight to bottom PE)
         control signals - a_first_out, w_latch_out
 
-TODO:
-	1. [DONE] also to add a secondary weight buffer so we can switch
-	   weights on-the-fly.
-	2. [DONE] weight update logic - global flag? -> no, use w_latch/ a_first signals that propagate 
-
 Assumptions:
 	1. partial sums cannot overflow/ no means to capture overflow
 	2. signed integer inputs/outputs
+	3. a_first singal arrives one cycle before a -> to break long path the flopped a_first is used instead of input signal
 */
 
 
@@ -52,14 +48,14 @@ reg weight_flag;  // which buffer to select?
 reg weight_upd;   // which buffer to update?
 reg weight_lock;  // should buffer values be held or be updated?
 
-//wire signed [NA-1:0] a_out_next;
 wire signed [NPOUT-1:0] p_out_next;
-//wire signed [NPOUT-1:0] b_out_valid_next;
-wire signed [NA-1:0] weight0_next, weight1_next, weight_opt;
+//wire signed [NA-1:0] weight0_next, weight1_next, weight_opt;
+wire signed [NA-1:0] weight_opt;
 wire signed [NPOUT-1:0] p_mul;
 wire weight_flag_next;
 wire weight_upd_next;
 wire weight_lock_next;
+wire weight0_lockn, weight1_lockn;
 
 always@(posedge clk) begin
 	if (rst) begin
@@ -68,8 +64,6 @@ always@(posedge clk) begin
 		p_out       <= 'd0;
 		weight_flag <= 'b1;
 		weight_upd  <= 'b0;
-		weight0     <= 'd0;
-		weight1     <= 'd0;
 		w_latch_out <= 'd0;
 		weight_lock <= 'd0;
 	end
@@ -79,13 +73,20 @@ always@(posedge clk) begin
 		p_out       <= p_out_next;
 		weight_flag <= weight_flag_next;
 		weight_upd  <= weight_upd_next;
-		weight0     <= weight0_next;
-		weight1     <= weight1_next;
 		w_latch_out <= w_latch;
 		weight_lock <= weight_lock_next;
 	end
 end
 
+always@(posedge clk) begin
+	//if(rst) weight0 <= 'd0;
+	if(weight0_lockn) weight0 <= b;
+end
+
+always@(posedge clk) begin
+	//if(rst) weight1 <= 'd0;
+	if(weight1_lockn) weight1 <= b;
+end
 
 ////// Weight update logic
 // a_first : used to update which buffer to use -> control weight_flag, unlock weights
@@ -93,15 +94,20 @@ end
 //
 // further : w_latch PAUSES loading weights in the idle buffer
 //	   : a_first kick STARTS loading weights in the idle buffer
+//	   : to break long-path in the design, PE now used the flopped
+//         : a_first signal instead of input.
 
 assign weight_flag_next = a_first ^ weight_flag;
 assign weight_upd_next = weight_upd ^ w_latch;
-assign weight_lock_next = ~a_first & ( weight_lock | w_latch );
+assign weight_lock_next = ~a_first_out & ( weight_lock | w_latch );
 
-assign weight_opt = weight_flag_next ? weight1 : weight0;
+assign weight_opt = weight_flag ? weight1 : weight0;
 
-assign weight0_next = (weight_upd_next==1'b0) && ~weight_lock_next? b : weight0;  
-assign weight1_next = (weight_upd_next==1'b1) && ~weight_lock_next? b : weight1;  
+assign weight0_lockn = (weight_upd_next==1'b0) && ~weight_lock_next;
+assign weight1_lockn = (weight_upd_next==1'b1) && ~weight_lock_next;
+
+//assign weight0_next = weight0_lockn ? b : weight0;  
+//assign weight1_next = weight1_lockn ? b : weight1;  
 
 
 

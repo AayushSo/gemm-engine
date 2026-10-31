@@ -407,7 +407,7 @@ u_act_controller
 	.a_valid(a_valid),
 	.a_stall(a_stall),
 	// SA control signals
-	.a_first(a_first),
+	.a_first_next(a_first),
 	.dummy_a_first(dummy_a_first),
 	.weight_stall(weight_stall),
 	.ld_go(ld_go),
