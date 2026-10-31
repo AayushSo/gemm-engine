@@ -65,14 +65,11 @@ The input streams carry data only: the engine knows every tile boundary from the
 
 ### Layout
 
-The routed die, 706 µm × 706 µm, with each cell coloured by its RTL block. On the right, the array is shaded by
-PE row and each bank pair is split into bank 0 and bank 1: the placer laid the rows out in order along the psum
-flow, from row 0 beside the weight banks to row 15 beside the accumulator banks.
+The routed die, 706 µm × 706 µm, with each cell coloured by its RTL block, the array shaded by PE row and each
+bank pair split into bank 0 and bank 1. The placer laid the rows out in order along the psum flow, from row 0
+beside the weight banks to row 15 beside the accumulator banks.
 
-<p align="center">
-  <img src="docs/img/layout.png" width="49%" alt="Routed die, cells coloured by block">
-  <img src="docs/img/layout_detail.png" width="49%" alt="Routed die, array shaded by PE row, bank halves split">
-</p>
+![Routed die, cells coloured by block, array shaded by PE row](docs/img/layout_detail.png)
 
 ## Repository layout
 
