@@ -2,16 +2,22 @@
 # GEMM engine v1: synthesis and pre-layout STA with OpenROAD-flow-scripts (ORFS), nangate45, in Docker.
 #
 # Usage (from anywhere):
-#   syn/run.sh [synth|sta|all]                    default: all (synth, then sta)
-#   CLK_PERIOD=4.0 syn/run.sh                     clock period in ns (default in syn/constraint.sdc)
+#   syn/run.sh [synth|sta|all|pnr]                default: all (synth, then sta)
+#                                                 pnr: the full flow through routing (ORFS "finish")
+#   CLK_PERIOD=4.0 syn/run.sh                     clock period in ns (default in syn/constraint.sdc);
+#                                                 a variant's SDC is fixed at synthesis, so use a new
+#                                                 VARIANT for each period
 #   VARIANT=hier_all SYNTH_HIERARCHICAL=1 SYNTH_MINIMUM_KEEP_SIZE=0 syn/run.sh synth
 #                                                 keep every module; then syn/area_by_module.py
 #                                                 gives the per-module area
+#   LEC_CHECK=0 syn/run.sh pnr                    skip ORFS's final equivalence check (it needs more
+#                                                 than the 8 GB Docker has on this design)
 #   ORFS_IMAGE=openroad/orfs:<tag> syn/run.sh     ORFS image (default below)
 #
 # Outputs, per variant: build/syn/{logs,reports,results,objects}/nangate45/gemm_v1/<variant>/
 #   reports/.../synth_stat.txt   cell area (yosys)
 #   reports/.../sta.rpt          worst paths, WNS/TNS, minimum period (OpenSTA, on 1_synth.odb)
+#   reports/.../6_finish.rpt     post-route timing, area, power (pnr)
 #
 # The run does not depend on the terminal; to let it outlive the shell:
 #   setsid nohup syn/run.sh > build/syn/run.log 2>&1 &
@@ -33,21 +39,22 @@ case $STEP in
 	synth) TARGETS="synth" ;;
 	sta)   TARGETS="" ;;
 	all)   TARGETS="synth" ;;
-	*)     echo "usage: $0 [synth|sta|all]"; exit 1 ;;
+	pnr)   TARGETS="finish" ;;
+	*)     echo "usage: $0 [synth|sta|all|pnr]"; exit 1 ;;
 esac
 
 mkdir -p build/syn
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE"
 
 # env passed into the container (empty values are ignored by ORFS / the SDC)
-ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE)
+ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE -e LEC_CHECK)
 
 docker run --rm -v "$REPO":/work -w /OpenROAD-flow-scripts/flow "${ENVS[@]}" "$IMAGE" bash -c "
 	set -euo pipefail
 	[ -f ../env.sh ] && source ../env.sh >/dev/null
 	MK='make DESIGN_CONFIG=/work/syn/config.mk WORK_HOME=$WORK FLOW_VARIANT=$VARIANT'
 	if [ -n '$TARGETS' ]; then \$MK $TARGETS; fi
-	if [ '$STEP' != synth ]; then
+	if [ '$STEP' = sta ] || [ '$STEP' = all ]; then
 		ODB=$WORK/results/$OUT/1_synth.odb
 		[ -f \$ODB ] || { echo \"no synthesized design (\$ODB); run synth first\"; exit 1; }
 		LIB=\$(\$MK -s print-LIB_FILES | sed -n 's/^LIB_FILES: *//p' | awk '{print \$1}') \
