@@ -4,20 +4,23 @@ This note records how v1 was taken through synthesis, place and route, gate-leve
 with an open-source flow. It covers what was run, the problems hit on the way, the results, and what they suggest
 doing next. The design is described in [`microarch.pdf`](microarch.pdf), which carries a summary of this document.
 
+Sections 1–4 cover the first implemented version (tag `v1.0-impl`, the *baseline*); section 5 covers two RTL
+optimizations and the final layout. The Summary and the conclusions give the final layout's numbers unless they say
+otherwise.
+
 ## Summary
 
 | | Result |
 |---|---|
+| Design | v1 with the weight select from a register and clock-gated weights (section 5) |
 | Library / corner | Nangate45, typical (1.10 V, 25 °C) |
-| Cell area | 422 645 µm² after synthesis |
-|  | 428 256 µm² (for 2.0 ns target) and 430 999 µm² (for 1.5 ns target) after place and route |
-| Die | 1.06 mm², 41% utilization (40% target) |
-| Clock | before layout: 1.705 ns |
-|  | after routing: 1.66 ns at a 2.0 ns target and **1.50 ns (667 MHz) at a 1.5 ns target**, typical corner |
-| Critical path | AC's `a_first` register → PE weight select → 8 × 8 multiply → 20-bit psum add → `p_out` |
-| Function | both routed netlists (2.0 ns and 1.5 ns), simulated at gate level, are bit-exact on a real workload (63 308 C rows) |
-| Power at 500 MHz | 341 mW on random int8 GEMMs; **279 mW on an image filter bank**; 139 mW idle|
-| Energy | 2.7 pJ per MAC (random GEMMs, 97% utilization); 3.9 pJ per useful MAC (filter bank, K = 9).|
+| Clock | **1.30 ns (770 MHz)** after routing; setup and hold met |
+| Cell area | 372 034 µm² after synthesis; 389 966 µm² after place and route |
+| Die | **0.50 mm²**, 79% utilization (75% target) |
+| Critical path | PE weight register → 8 × 8 multiply → 20-bit psum add → `p_out` |
+| Function | the routed netlist, simulated at gate level, is bit-exact on a real workload (63 308 C rows) |
+| Power at 500 MHz | **168 mW** on an image filter bank; 150 mW excluding the flop-based buffers (gate-level simulation) |
+| Energy | 2.34 pJ per useful MAC (filter bank, K = 9); 2.09 pJ excluding the buffers |
 
 ## Tools
 
@@ -264,56 +267,135 @@ directly and annotates 684 432 of 688 340 pins.
 - 2% of the flops take propagated activity.
 
 
-## 5. Conclusions
+## 5. Optimized RTL: weight select from a register, clock-gated weights
 
-1. **Timing.** v1 closes 1.5 ns (667 MHz) after routing, at the typical corner. The limit is the PE: the weight
-   select sits in series with the multiply-accumulate, and `a_first` fans out across a diagonal before it reaches the
-   select. The control paths the spec worried about (the combinational interlock, the accumulate) have margin.
-2. **Area.** The array is 61% of the cells; the flop-based buffers are a third. As SRAM macros the buffers would shrink
-   and about half of the flops would leave the clock tree.
-3. **Clocking is almost half the power.** The clock tree (73 mW) and the flops' clock-driven internal power (58 mW)
-   are 131 of the filter-bank's 279 mW and do not depend on the data: idle, the engine draws 139 mW. v1 has no
-   clock gating.
-4. **Real data matters.** Image data toggles about half as often as random int8 and cuts the array's power by 31%.
-   Random-data power is close to a worst case.
-5. **Padding lanes are not worth zeroing.** Random padding costs only 4 mW more than zeros: the zero weights already
-   keep those rows' multipliers quiet.
-6. **Partial K tiles raise energy per useful MAC.** Per hardware MAC, the filter bank costs
+Two RTL changes follow the baseline (commit `efd9fc4`); *optimized* below means both:
+
+1. **Weight select from a register.** AC drives the array with `a_first` one cycle early (`a_first_next`). The PE
+   flips `weight_flag` on it and feeds the multiplier from `weight_flag ? weight1 : weight0`, a register select; the
+   weight lock keeps its old timing through `a_first_out`. This takes the `a_first` fanout and the select XOR off the
+   multiply path.
+2. **Clock-gated weight buffers.** `weight0`/`weight1` load only on their enable and have no reset, so synthesis
+   maps each to a clock-gating cell.
+
+Verification: the RTL regression (596 runs, including the abort sweeps) passes, and the abort mutants (no dummy
+`a_first`, clearing `a_first` on abort) are still caught. One filter-bank frame is bit-exact on the RTL and at gate
+level on both new netlists (63 308 C rows, 1 979 headers each).
+
+Commands:
+
+```
+LEC_CHECK=0 INFER_CLKGATES=1 VARIANT=cg_pnr_1500 CLK_PERIOD=1.5 syn/run.sh pnr
+LEC_CHECK=0 INFER_CLKGATES=1 HOLD_SLACK_MARGIN=0.05 VARIANT=cg_pnr_1300 CLK_PERIOD=1.3 syn/run.sh pnr
+LEC_CHECK=0 INFER_CLKGATES=1 HOLD_SLACK_MARGIN=0.05 SETUP_SLACK_MARGIN=0.01 CORE_UTILIZATION=75 PLACE_DENSITY=0.82 \
+    VARIANT=cg_pnr_1300_u75s CLK_PERIOD=1.3 syn/run.sh pnr
+```
+
+`INFER_CLKGATES=1` runs Yosys's `clockgate` pass, which gates every flop with an enable: 696 `CLKGATE_X1` cells, 512 of
+them on the PE weights and the rest on bank words and controller registers.
+
+Results (typical corner):
+
+| Metric | Baseline <br> 1.5 ns + 40% util | Optimized <br> 1.5 ns + 40% util | Optimized <br> 1.3 ns + 40% util | **Optimized <br> 1.3 ns + 75% util** |
+|---|---|---|---|---|
+| Core utilization after routing | 41% | 42% | 42% | 79% |
+| Minimum clock period | 1.50 ns (667 MHz) | 1.41 ns (710 MHz) | **1.30 ns (771 MHz)** | **1.30 ns (770 MHz)** |
+| Setup / hold slack | 0.00 / +0.02 ns | +0.09 / −0.01 ns (2 endpoints) | 0.00 / +0.03 ns | 0.00 / +0.04 ns |
+| Critical path | `a_first` → weight select → multiply → `p_out` | `weight_flag` → multiply → `p_out` |  `weight_flag` → multiply → `p_out` | `weight0` → multiply → `p_out` |
+| Cell area after synthesis | 422 645 µm² | 372 034 µm² | 372 034 µm² | 372 034 µm² |
+| Cell area after routing | 430 999 µm² | 386 053 µm² | 390 823 µm² | 389 966 µm² |
+| Die | 1.06 mm² | 0.93 mm² | 0.93 mm² | **0.50 mm²** |
+| Timing-repair buffers | 6 967 | 6 724 | 11 934 | 11 059 |
+| Clock tree | 7 365 buf <br> 1 824 inv <br> | 8 950 buf <br> 2 472 inv <br> 696 gates | 8 987 buf <br> 2 423 inv <br> 696 gates | 9 208 buf <br> 2 267 inv <br> 696 gates |
+| Setup skew | 0.10 ns | 0.35 ns | 0.36 ns | 0.31 ns |
+| Worst IR drop | 6.3 mV | 3.0 mV | 3.9 mV | 5.0 mV |
+| Routing usage (metal2 / metal3 / all layers) | 39% / 30% / 15% | 37% / 27% / 14% | 37% / 28% / 14% | 61% / 46% / 25% |
+| Routing | 0 DRC violations | 0 DRC violations | 0 DRC violations | 0 DRC violations |
+| Gate-level, one frame | bit-exact | bit-exact | bit-exact | bit-exact |
+
+- At 75% utilization (79% after repair) the die shrinks 46%, to 0.50 mm², with no cost in timing or cell area;
+  routing is busier (metal2 61%) but clears in 5 detailed-routing iterations. 65% also closed (0.58 mm²). A first 75%
+  run missed 1.3 ns by under 1 ps at one endpoint; `SETUP_SLACK_MARGIN=0.01` closed it.
+- Each gated flop loses its hold mux, so the cell area drops 12% after synthesis; the die follows, since the flow
+  sizes it from the cell area at the utilization target.
+
+Power: gate-level VCD (read natively by OpenSTA) on both 1.5 ns layouts and on the final layout, filter bank frame 1,
+cycles 2 000–3 000, 500 MHz. The method differs from section 4's per-flop numbers, so compare these columns with each
+other only.
+
+| | Baseline, 1.5 ns, 40% util | Optimized, 1.5 ns, 40% util | Change | **Optimized, 1.3 ns, 75% util (final)** |
+|---|---|---|---|---|
+| **Excluding buffers** | 165.5 mW | 150.7 mW | **−14.8 mW (−9%)** | **150.4 mW** |
+| ↳ array | 105.5 mW | 92.3 mW | −13.2 mW | 93.2 mW |
+| ↳ flops | 58.9 mW | 48.7 mW | −10.2 mW | 48.6 mW |
+| ↳ logic | 71.1 mW | 65.6 mW | −5.5 mW | 66.6 mW |
+| ↳ share of the clock tree | 35.6 mW | 36.5 mW | +0.9 mW | 35.2 mW |
+| Energy per useful MAC, excluding buffers | 2.30 pJ | 2.09 pJ | −9% | 2.09 pJ |
+| Total | 234.1 mW | 168.8 mW | −28% | 168.4 mW |
+
+- The weight gating saves about 10 mW of flop clocking (estimate: 7–8 mW) and about 5 mW of logic (the hold muxes).
+- The clock tree itself does not shrink: the gates sit at the leaves, and the buffers above them still toggle every
+  cycle. Gating high in the tree (next steps, Power 1) is the next large saving.
+- The final layout draws the same power as the 1.5 ns one: its shorter wires take about 1 mW off the clock tree,
+  and the tighter clock's extra repair buffers add about 1 mW of logic back.
+- Most of the drop in the total is the bank words, which `clockgate` also gated. The baseline's buffer power is
+  understated by about 30 mW (its never-written accumulator flops are X, section 4), so the real buffer saving is
+  larger; the buffers become SRAM either way.
+
+Learnings:
+
+- Yosys's `clockgate` skips flops with a synchronous reset and an enable (the gate would have to open during reset).
+  The weight registers needed their reset removed to be gated. Since the weight flops are always written before
+  they are read, this change was considered acceptable.
+- Gated branches are harder for clock-tree synthesis to balance: skew rose from 0.10 to 0.35 ns, and the 1.5 ns run
+  ended with two hold violations of −0.01 ns on column-0 weight registers. `HOLD_SLACK_MARGIN=0.05` (repair hold to
+  +0.05 ns) cleared them at 1.3 ns.
+- OpenSTA's `read_vcd` takes activity per unit of absolute time, so a gate-level VCD must run at the analyzed clock.
+  The testbench runs at 10 ns; the VCD's timestamps are scaled by 1/5 before a 500 MHz power run.
+- The power split must follow the clock through the gating cells (their `GCK` output), and a gate's enable logic
+  belongs to the block it gates.
+
+## 6. Conclusions
+
+1. **Timing.** The final layout closes 1.3 ns (770 MHz) at the typical corner. The baseline stopped at 1.5 ns
+   because the PE's weight select sat in series with the multiply-accumulate, with `a_first` fanning out across a
+   diagonal before it; selecting from a register removed that. 
+2. **Area.** The final design is 389 966 µm² on a 0.50 mm² die. In the baseline's per-block split (section 1) the
+   array is 61% of the cells and the flop-based buffers a third; as SRAM macros the buffers would shrink and about half
+   of the flops would leave the clock tree.
+3. **Clocking is almost half the power.** In the baseline, the clock tree (73 mW) and the flops' clock-driven
+   internal power (58 mW) are 131 of the filter bank's 279 mW and do not depend on the data: idle, the engine draws
+   139 mW. Gating the weight buffers (section 5) saves 10 mW of flop clocking, but the clock tree itself does not
+   shrink; gating high in the tree is the next step.
+4. **Padding lanes are not worth zeroing.** Random padding costs only 4 mW more than zeros (baseline): the zero
+   weights already keep those rows' multipliers quiet.
+5. **Partial K tiles raise energy per useful MAC.** In the baseline, per hardware MAC, the filter bank costs
    2.2 pJ against random data's 2.7 pJ. But K = 9 uses 9 of 16 rows, so per useful MAC it costs 3.9 pJ: the idle rows
-   still pay their clocking and pass psums down. The fix is in the mapping (v2's regrouped cores), not in gating.
-7. **The routed netlists are functionally correct.** Simulated at gate level, both are bit-exact on a real workload,
+   still pay their clocking and pass psums down. v2 attempts to fix this by regrouping cores.
+6. **The routed netlists are functionally correct.** Simulated at gate level, all are bit-exact on a real workload,
    which stands in for the final equivalence check.
-8. **The power numbers are slightly conservative.** The per-flop method is accurate for flops but reads logic power
+7. **The power numbers are slightly conservative.** The per-flop method is accurate for flops but reads logic power
    about 19% high, about 6% on the total; glitch power, which neither simulation counts, works the other way.
 
-## 6. Next steps
+## 7. Next steps
 
 **Power** (buffers left out: they become SRAM):
 
-1. Clock-gate the PE weight buffers, each with its own capture enable: they hold in about 74% of cycles. Expected
-   saving about 7–8 mW after the gating cells' own cost. With the enable written in the RTL, Yosys's `clockgate` pass
-   can map the gating to Nangate's `CLKGATETST_X1`. A synchronous reset needs the gate open during reset, or no reset
-   on these registers.
-2. Gate the whole array's clock when no pass is in flight (from AC's go to OC's last read): up to about 50 mW whenever
+1. Gate the whole array's clock when no pass is in flight (from AC's go to OC's last read): up to about 50 mW whenever
    the engine waits. One gate high in the tree also stops the clock buffers below it.
-3. Remove the synchronous reset from datapath flops (weights, `a_out`, `p_out`, skew stages): less area and power, a
-   shorter critical path, simpler clock gating. Premise to check: nothing samples them before valid data.
-4. Rerun the power flow with SRAM macros for the buffers.
+2. Remove the synchronous reset from the remaining datapath flops (`a_out`, `p_out`, skew stages): less area and power, a shorter critical path. Premise to check: nothing samples them before valid
+   data.
+3. Rerun the power flow with SRAM macros for the buffers.
 
 **Clock speed:**
 
-1. Take the weight select off the multiply path (send `a_first` one cycle early so the PE selects from a register, or
-   keep an active weight register loaded at the swap): about 0.33 ns, which removes every path over 1.5 ns found so
-   far and should allow about 750–800 MHz.
-2. Beyond about 800 MHz: a pipelined MAC (carry-save product register; adds one cycle of latency, `OC_PSUM_LAT` + 1),
+1. Beyond about 800 MHz: a pipelined MAC (carry-save product register; adds one cycle of latency, `OC_PSUM_LAT` + 1),
    the interlock go computed a cycle early, registered inputs, and a recheck of the bank write paths once the banks
    are SRAM macros.
 
 **Experiments (tentative):**
 
-1. Place and route at a higher core utilization (about 65% instead of 40%): the 1.06 mm² die is the area at the 40%
-   target, not the design's minimum (its cells are 0.43 mm²). Watch routing convergence and timing.
-2. Power with gaps in the input streams (below full rate): the baseline for gating the array's clock when idle.
+1. Power with gaps in the input streams (below full rate): the baseline for gating the array's clock when idle.
 
 **Flow:**
 

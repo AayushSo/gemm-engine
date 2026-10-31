@@ -30,5 +30,5 @@ export SDC_FILE      = $(SYN_DIR)/constraint.sdc
 export SYNTH_HDL_FRONTEND = slang
 
 # floorplan / place, for the later P&R run (no macros: all buffers are flops)
-export CORE_UTILIZATION = 40
-export PLACE_DENSITY    = 0.60
+export CORE_UTILIZATION ?= 40
+export PLACE_DENSITY    ?= 0.60

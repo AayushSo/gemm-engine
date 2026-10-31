@@ -14,6 +14,9 @@
 #                                                 than the 8 GB Docker has on this design)
 #   INFER_CLKGATES=1 syn/run.sh                   map flop enables to clock-gating cells (yosys clockgate)
 #   HOLD_SLACK_MARGIN=0.05 syn/run.sh pnr         repair hold to this margin (ns) instead of 0
+#   SETUP_SLACK_MARGIN=0.01 syn/run.sh pnr        repair setup to this margin (ns) instead of 0
+#   CORE_UTILIZATION=65 PLACE_DENSITY=0.72 syn/run.sh pnr
+#                                                 floorplan (defaults in syn/config.mk: 40, 0.60)
 #   ORFS_IMAGE=openroad/orfs:<tag> syn/run.sh     ORFS image (default below)
 #
 # Outputs, per variant: build/syn/{logs,reports,results,objects}/nangate45/gemm_v1/<variant>/
@@ -49,7 +52,7 @@ mkdir -p build/syn
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE"
 
 # env passed into the container (empty values are ignored by ORFS / the SDC)
-ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE -e LEC_CHECK -e INFER_CLKGATES -e HOLD_SLACK_MARGIN)
+ENVS=(-e CLK_PERIOD -e SYNTH_HIERARCHICAL -e SYNTH_MINIMUM_KEEP_SIZE -e LEC_CHECK -e INFER_CLKGATES -e HOLD_SLACK_MARGIN -e SETUP_SLACK_MARGIN -e CORE_UTILIZATION -e PLACE_DENSITY)
 
 docker run --rm -v "$REPO":/work -w /OpenROAD-flow-scripts/flow "${ENVS[@]}" "$IMAGE" bash -c "
 	set -euo pipefail
