@@ -63,6 +63,17 @@ The input streams carry data only: the engine knows every tile boundary from the
 | Power at 500 MHz | 257 mW on random int8 GEMMs, 168 mW on the image filter bank, 57 mW idle (gate-level simulation) |
 | Workloads | At 500 MHz: 4K grayscale video at 60 fps through the 16-filter bank; ResNet-18 at about 65 images/s (99 at 770 MHz, cycle model) |
 
+### Layout
+
+The routed die, 706 µm × 706 µm, with each cell coloured by its RTL block. On the right, the array is shaded by
+PE row and each bank pair is split into bank 0 and bank 1: the placer laid the rows out in order along the psum
+flow, from row 0 beside the weight banks to row 15 beside the accumulator banks.
+
+<p align="center">
+  <img src="docs/img/layout.png" width="49%" alt="Routed die, cells coloured by block">
+  <img src="docs/img/layout_detail.png" width="49%" alt="Routed die, array shaded by PE row, bank halves split">
+</p>
+
 ## Repository layout
 
 ```
@@ -71,7 +82,7 @@ The input streams carry data only: the engine knows every tile boundary from the
 │   ├── microarch.pdf (.docx)     Microarchitecture document: design, interfaces, timing, results
 │   ├── implementation.md         Implementation flow: synthesis, place and route, gate-level sim, power
 │   ├── spec.md                   Original v1 specification and decision log
-│   └── img/                      Top-level diagram
+│   └── img/                      Top-level diagram and layout images
 ├── rtl/                          Generic modules shared by all versions (no project package)
 │   ├── pe.sv                     Processing element with double-buffered, clock-gated weights
 │   ├── systolic.sv               M×M array of PEs
